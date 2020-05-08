@@ -462,76 +462,7 @@ Heatmap(sub.profile, col = gradPal, row_names_gp = gpar(fontsize = 6), column_na
 
 
 
-## Load GAAD network as the reference interactome 
-Downloaded from [GAAD](http://gaad.medgenius.info/Downloads/co-occurrence_of_gene_pairs_in_ADs.txt.gz)
 
-```{r}
-GAAD = readRDS('GAAD_net.RDS')
-#PCNet
-load("/Volumes/MCWH_HDD/rotation3/interactome/PCNet.rda")
-G = graph_from_adjacency_matrix(adjmatrix = PCNet) #parameters?
-
-data5.paired.datasets = pair.datasets(G, data5.activity.scores)
-data5.paired.datasets.2 = pair.datasets(GAAD, data5.activity.scores)
-EL = get.edgelist(G, names = FALSE)
-EL.2 = get.edgelist(GAAD, names = FALSE)
-
-G.adj = as(get.adjacency(data5.paired.datasets$net), 'dgTMatrix')
-GAAD.adj = as(get.adjacency(data5.paired.datasets.2$net), 'dgTMatrix')
-
-edge.idx = (G.adj@i)*nrow(G.adj) + (G.adj@j+1)
-edge.idx.2 = (GAAD.adj@i)*nrow(GAAD.adj) + (GAAD.adj@j+1)
-```
-
-
-
-```{r}
-data5.nets = construct_cell_networks_noPrior(gene_activities = data5.paired.datasets.2$activity.scores[, 1:10], thread_no = 8)
-```
-
-
-## Compute topological-specificity of genes in each network
-```{r}
-require(igraph)
-# core.topo.spec = sapply(cellstate.nets[ACTIONet.out$core.out$core.archs], function(Adj) {
-data5.core.topo.spec = sapply(data5.nets, function(Adj) {
-  G = graph_from_adjacency_matrix(Adj, mode = "undirected", weighted = TRUE)
-  V(G)$name = data5.paired.datasets.2$genes
-  
-  topo.spec = topo.spec(G, sample_no = 1000)
-  return(topo.spec)
-})
-colnames(data5.core.topo.spec) = data5.arch.annot$Labels[1:10]#ACTIONet.out$core.out$core.archs]
-# arch.annot$archtypeLabels updated to arch.annot$Labels
-rownames(data5.core.topo.spec) = data5.paired.datasets.2$genes
-head(data5.core.topo.spec)
-```
-
-
-## Constrained networks
-```{r}
-data5.cellstate.nets = construct_cell_networks(net = GAAD.adj, 
-                                               gene_activities = data5.paired.datasets.2$activity.scores, 
-                                               thread_no = 8)
-```
-
-## Compute topological-specificity of genes in each "cellstate" network
-```{r}
-require(igraph)
-# core.topo.spec = sapply(cellstate.nets[ACTIONet.out$core.out$core.archs], function(Adj) {
-data5.cellstate.topo.spec = sapply(data5.cellstate.nets, function(Adj) {
-  G = graph_from_adjacency_matrix(Adj, mode = "undirected", weighted = TRUE)
-  V(G)$name = data5.paired.datasets.2$genes
-  
-  topo.spec = topo.spec(G, sample_no = 1000)
-  return(topo.spec)
-})
-colnames(data5.cellstate.topo.spec) = data5.arch.annot$Labels #ACTIONet.out$core.out$core.archs]
-# arch.annot$archtypeLabels updated to arch.annot$Labels
-rownames(data5.cellstate.topo.spec) = data5.paired.datasets.2$genes
-head(data5.cellstate.topo.spec)
-data5.cellstate.topo.spec["HES1",colnames(data5.cellstate.topo.spec)=="BEC"]
-```
 
 ```{r packages}
 sessionInfo()
