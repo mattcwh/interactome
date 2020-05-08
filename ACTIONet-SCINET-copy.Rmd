@@ -1,0 +1,589 @@
+---
+title: "ACTIONet-SCINET-copy"
+author: "MWHC"
+date: "08/05/2020"
+output: html_document
+---
+
+## import necessary libraries
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+require(SCINET)
+require(ACTIONet)
+require(SingleCellExperiment)
+
+# following to be confirmed if necessary
+require(dplyr)
+# required for some built-in ACTIONet plotting functions
+require(ggplot2)
+require(RColorBrewer)
+require(ggpubr)
+require(ComplexHeatmap)
+#require(Seurat)
+```
+
+
+## Preprocessing using ACTIONet framework
+```{r ACTIONet analysis, message=FALSE, warning=FALSE}
+
+# turn whatever format into SCE
+data5.seurat = readRDS("./data/data5_cd45neg_mix.rds")
+data5.sce = import.sce.from.Seurat(data5.seurat)
+rm(data5.seurat)
+
+########################################################################################################
+
+# Run ACTIONet, generates attributes (eg. archetypes)
+data5.sce = reduce.sce(data5.sce)
+data5.ACTIONet.out = run.ACTIONet(data5.sce, k_max = 20)
+# needed for some plot functions eg. interactive
+data5.cn = coreness(data5.ACTIONet.out$ACTIONet)
+data5.cn.pr = page_rank(data5.ACTIONet.out$ACTIONet, personalized =data5.cn)$vector
+
+########################################################################################################
+
+# Create a marker genes list for ACTIONet annotation
+
+marker.genes = readRDS('./data/human_pbmc_marker.RDS')
+# this is originally made for data5
+marker.genes.new = list()
+marker.genes.new$`CD4+ T cell` = marker.genes$`CD4+ T cell`
+marker.genes.new$`Cytotoxic T cell` = marker.genes$`Cytotoxic T cell`
+marker.genes.new$`B cell` = marker.genes$`B cell`
+marker.genes.new$`NK cell/ILC` = c(marker.genes$`Natural killer cell`, "PRF1+","FGFBP2+") # from paper
+marker.genes.new$`DC` = marker.genes$`Dendritic cell`
+marker.genes.new$`Plasmacytoid DC` = c(marker.genes$`Plasmacytoid dendritic cell`,"LRRC26+","PTCRA+")
+# from Seurat
+marker.genes.new$`Kupffer/MoMC` = c("C1QB+","C1QA+","C1QC+","LYZ+","AIF1+","S100A9+","HLA-DRA+","HLA-DPA1+","HLA-DPB1+","HLA-DQA1+","CD14+","CD68+","FCN1+","CD3D-","CD3E-","CD3G-","TRAC-","NKG7-","KLRB1-","KLRD1-")
+marker.genes.new$`BEC` = c("ALB+","DEFB1+","VTN+","AMBP+","SERPINA1+","TM4SF4+","ANXA4+","GC+","KRT8+","FXYD2+","KRT18+","RBP4+","SPP1+","KRT7+","EPCAM+")
+marker.genes.new$`Mesenchyme` = c("TAGLN+","ACTA2+","RGS5+","MYL9+","COL1A1+","DCN+","BGN+","COL1A2+","SOD3+","ADIRF+","PDGFRB+")
+# from paper
+marker.genes.new$`Endothelial cell` = c("PLVAP+","CLEC14A+","VWF+","EGFL7+","EMCN+","HSPG2+","OIT3+","FCN3+","CLEC4M+","CLEC4G+","RGS5+")
+marker.genes.new$`Mast cell` = c("CPA3+", "TPSAB1+")
+marker.genes.new$`Plasma cell` = c("FCRL5+","JSRP1+")
+marker.genes.new$`Cycling cell` = c("MKI67+","TOP2A+","RRM2+","UBE2C+")
+
+
+########################################################################################################
+
+# ACTIONet annotate cell types using marker list
+
+data5.ACTIONet.out = annotate.cells.using.markers(ACTIONet.out = data5.ACTIONet.out, sce = data5.sce, 
+    marker.genes = marker.genes.new)
+# this updated "Labels" output is very clumsy, create a shortcut here
+data5.ACTIONet.out$Labels = data5.ACTIONet.out$annotations$`InferredCelltypes_2020-05-08 18:12:13`$Labels
+data5.sce$Labels = names(data5.ACTIONet.out$Labels)
+data5.Pal = ggpubr::get_palette("d3", length(unique(data5.sce$Labels))) #changed from levels() to unique()
+names(data5.Pal) = unique(data5.sce$Labels) #changed from levels() to unique()
+
+# visualise annotated cell types
+plot.ACTIONet.interactive(data5.ACTIONet.out, data5.ACTIONet.out$Labels, node.size = 2, transparency.attr = data5.cn.pr, trans.fact = 2)
+plot.ACTIONet.gene.view(data5.ACTIONet.out)
+plot.ACTIONet.3D(data5.ACTIONet.out)
+
+```
+
+
+## archetype annotation
+```{r archetype}
+# assign a cell type to each archetype, based on each cell's annotation
+data5.arch.annot = annotate.archetypes.using.labels(data5.ACTIONet.out, data5.sce$Labels, core = F)
+
+# contain signature of each archetype, this is for calculation of gene activity scores
+data5.A = data5.ACTIONet.out$signature.profile
+
+# (new) visualise core archetypes in embedding map
+plot.ACTIONet.archetype.footprint(data5.ACTIONet.out)
+# core archetypes #2, 19 are in BEC
+# core archetype #5 is in stromal cells
+```
+
+
+## Option 1, jump straight to core archetype-specific interactomes and TopS
+```{r 1. iGraphs for each core archetype}
+
+# this one gives the graph for each core archetype (19 for data5)
+# default G is NULL, which uses built-in PCNet
+data5.cellstate.nets.list.igraph = run.SCINET.archetype(ACTIONet.out = data5.ACTIONet.out)
+
+# need to find a better way to visualise
+#plot.igraph(data5.cellstate.nets.list.igraph[[5]])
+
+# TopS results access
+V(data5.cellstate.nets.list.igraph$`5`) # genes
+V(data5.cellstate.nets.list.igraph$`5`)$specificity # corresponding scores
+```
+################################################### #
+# For cell types instead of cell archetypes/states: #
+################################################### #
+```{r 1. iGraphs for each annotated cell type}
+# this following is needed first before running run.SCINET.annotation()
+# because run.SCINET.annotation() doesn't take the "sce" as an argument, it will fail to calculate this output
+data5.ACTIONet.out = compute.annotations.feature.specificity(data5.ACTIONet.out, data5.sce, annotation.name = "InferredCelltypes_2020-05-08 18:12:13") # annotation.name can be found at data5.ACTIONet.out$annotations$...
+data5.celltype.nets.list.igraph = run.SCINET.annotation(ACTIONet.out = data5.ACTIONet.out, annotation_name = "InferredCelltypes_2020-05-08 18:12:13")
+
+# TopS results access
+V(data5.celltype.nets.list.igraph$BEC) # genes
+V(data5.celltype.nets.list.igraph$BEC)$specificity # corresponding scores
+
+########################################################################################################
+
+# other possibly relevant functions...
+run.SCINET() # haven't figured out how to use this
+run.SCINET.gene.scores() # haven't figured out what is the appropriate input
+```
+
+## Option 2, break down and run each step manually
+### 2a. import interactome
+```{r 2a. import interactome}
+# original code, maybe useful for custom interactomes
+
+#if( is.null(G) ) {
+#		if(!exists('PCNet') ) {
+#			data("PCNet")
+#		}
+#		Adj = PCNet		
+#	} else if(is.matrix(G) | is.sparseMatrix(G)) {
+#		Adj = as(G, 'sparseMatrix')
+#		Adj@x = rep(1, length(Adj@x))
+#	} else if(is.igraph(G)){		
+#		Adj = as(get.adjacency(G), 'sparseMatrix')
+#	}
+
+load("./data/PCNet.rda") # PCNet dgCMatrix, comes with SCINET package
+
+```
+
+### 2b. Estimate gene activity score
+#### in this package, "signature profile" means un-normalised (NMF signatures?), "activity score" means normalised
+```{r 2b. activity score}
+
+# unification.out comes from the original run.ACTIONet()
+# DE.core is signature profile of core/unified archetypes
+DE.profile = as.matrix(log1p(SummarizedExperiment::assays(data5.ACTIONet.out$unification.out$DE.core)[["significance"]]))
+
+# use only common genes in expr data and interactome adj matrix
+common.genes = intersect(rownames(DE.profile), rownames(PCNet))
+A.filtered = DE.profile[common.genes, ]
+G.filtered = PCNet[common.genes, common.genes]
+
+# calculate activity scores
+thread_no = 8 # threads for computation
+gene.activity.scores = SCINET::compute_gene_activities_full(A = A.filtered, 
+                                                            thread_no = thread_no)
+# I think naming is optional? Will be useful for visualisation though
+rownames(gene.activity.scores) = common.genes
+colnames(gene.activity.scores) = c(1:ncol(gene.activity.scores))
+
+```
+
+### 2c. construct networks + TopS
+```{r construct networks + TopS}
+
+thread_no = 8 # threads for computation
+cellstate.nets = SCINET::construct_cell_networks(net = G.filtered, 
+                                                 gene_activities = gene.activity.scores, 
+                                                 thread_no = thread_no)
+cellstate.nets.list = as.list(cellstate.nets)
+
+
+min.edge.weight = 2 # graph filter parameter
+spec.sample_no = 1000 # TopS sample parameter
+cellstate.nets.list.igraph = lapply(cellstate.nets.list, function(G.Adj) {
+		G.Adj@x[G.Adj@x < min.edge.weight] = 0
+		filter.mask = Matrix::colSums(G.Adj) == 0
+		G = igraph::graph_from_adjacency_matrix(G.Adj[!filter.mask, !filter.mask], mode = "undirected", weighted = T)
+		V(G)$name = common.genes[!filter.mask]
+		#TopS
+		z.scores = topo.spec(G, spec.sample_no)
+		V(G)$specificity = 1 / (1 + exp(-z.scores))
+		
+		return(G)
+})
+# name the graphs
+if(is.null(colnames(DE.profile))) {		
+		names(cellstate.nets.list.igraph) = 1:ncol(DE.profile)
+	} else {
+		names(cellstate.nets.list.igraph) = colnames(DE.profile)
+	}
+
+# TopS results access
+V(cellstate.nets.list.igraph$`5`) # genes
+V(cellstate.nets.list.igraph$`5`)$specificity # corresponding scores
+V(cellstate.nets.list.igraph$`5`)[["HES1"]]
+
+
+# clean up environment
+rm(thread_no)
+rm(min.edge.weight)
+rm(spec.sample_no)
+rm(cellstate.nets)
+rm(cellstate.nets.list)
+
+rm(A.filtered)
+rm(G.filtered)
+rm(common.genes)
+rm(DE.profile)
+```
+
+### Appendix
+### Visualise normalized gene activity scores for unified archetypes
+```{r visualise activity score}
+# this is to create a list of marker genes for visualising "activity scores"
+
+# the following depends on the list of marker genes defined when preparing for ACTIONet analysis above
+# and also the named gene.activity.score matrix
+data5.positive.genes = sapply(marker.genes.new, function(gs) {
+  genes = intersect(rownames(gene.activity.scores), stringr::str_replace(gs[grep("+", gs, fixed = TRUE)], stringr::fixed("+"), ""))
+})
+
+genes = sort(unique(unlist(data5.positive.genes)))
+genes.idx = match(genes, rownames(gene.activity.scores))
+sub.profile = gene.activity.scores[genes.idx,]
+Annot = unique(colnames(gene.activity.scores)) #changed from levels() to unique()
+colCelltype.Pal = ggpubr::get_palette("d3", length(Annot))
+names(colCelltype.Pal) = Annot
+	
+require(ComplexHeatmap)
+  
+ha_cols = HeatmapAnnotation(df = list(Celltype = colnames(sub.profile)), col = list(Celltype = colCelltype.Pal), annotation_legend_param = list(Celltype=list(title_gp = gpar(fontsize = 8), labels_gp = gpar(fontsize = 5))), which = "column")  
+  
+gradPal = grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(n = 9, name = "RdYlBu")))(100)
+Heatmap(sub.profile, col = gradPal, row_names_gp = gpar(fontsize = 6), column_names_gp = gpar(fontsize = 0), top_annotation = ha_cols, name = "Expression of marker genes", row_title = "Genes", column_title = "Cell states")
+  
+```
+
+################################################### #
+# For cell types instead of cell archetypes/states: #
+################################################### #
+
+### 2b. Estimate gene activity score
+```{r 2b. activity score (cell types)}
+
+# if we follow ACTIONet workflow, needs to get signature profile for annotated cell types first
+data5.ACTIONet.out = compute.annotations.feature.specificity(data5.ACTIONet.out, data5.sce, annotation.name = "InferredCelltypes_2020-05-08 18:12:13") # annotation.name can be found at data5.ACTIONet.out$annotations$...
+
+# then we can extract the cell type DE.profile
+DE.profile = as.matrix(log1p(SummarizedExperiment::assays(data5.ACTIONet.out$annotations$`InferredCelltypes_2020-05-08 18:12:13`$DE.profile)[["significance"]]))
+
+common.genes = intersect(rownames(DE.profile), rownames(PCNet))
+A.filtered = DE.profile[common.genes, ]
+G.filtered = PCNet[common.genes, common.genes]
+
+celltype.activity.scores = SCINET::compute_gene_activities_full(A = A.filtered,
+                                                             thread_no = 8)
+# I think naming is optional? Will be useful for visualisation though
+rownames(celltype.activity.scores) = common.genes
+colnames(celltype.activity.scores) = colnames(DE.profile)
+
+```
+
+### 2c. construct networks + TopS
+```{r construct networks + TopS (cell types)}
+
+thread_no = 8 # threads for computation
+celltype.nets = SCINET::construct_cell_networks(net = G.filtered, 
+                                                 gene_activities = celltype.activity.scores, 
+                                                 thread_no = thread_no)
+celltype.nets.list = as.list(celltype.nets)
+
+
+min.edge.weight = 2 # graph filter parameter
+spec.sample_no = 1000 # TopS sample parameter
+celltype.nets.list.igraph = lapply(celltype.nets.list, function(G.Adj) {
+		G.Adj@x[G.Adj@x < min.edge.weight] = 0
+		filter.mask = Matrix::colSums(G.Adj) == 0
+		G = igraph::graph_from_adjacency_matrix(G.Adj[!filter.mask, !filter.mask], mode = "undirected", weighted = T)
+		V(G)$name = common.genes[!filter.mask]
+		#TopS
+		z.scores = topo.spec(G, spec.sample_no)
+		V(G)$specificity = 1 / (1 + exp(-z.scores))
+		
+		return(G)
+})
+# name the graphs
+if(is.null(colnames(DE.profile))) {		
+		names(celltype.nets.list.igraph) = 1:ncol(DE.profile)
+	} else {
+		names(celltype.nets.list.igraph) = colnames(DE.profile)
+	}
+
+# TopS results access
+V(celltype.nets.list.igraph$`Mesenchyme`) # genes
+V(celltype.nets.list.igraph$`Mesenchyme`)$specificity # corresponding scores
+V(celltype.nets.list.igraph$BEC)[["HES1"]]
+
+
+# clean up environment
+rm(thread_no)
+rm(min.edge.weight)
+rm(spec.sample_no)
+rm(celltype.nets)
+rm(celltype.nets.list)
+
+rm(A.filtered)
+rm(G.filtered)
+rm(common.genes)
+rm(DE.profile)
+```
+
+### Appendix
+### Visualize normalized gene activity scores for cell types
+```{r visualise activity score (cell types)}
+# this is to create a list of marker genes for visualising "activity scores"
+
+# the following depends on the list of marker genes defined when preparing for ACTIONet analysis above
+# and also the named gene.activity.score matrix
+data5.positive.genes = sapply(marker.genes.new, function(gs) {
+  genes = intersect(rownames(celltype.activity.scores), stringr::str_replace(gs[grep("+", gs, fixed = TRUE)], stringr::fixed("+"), ""))
+})
+
+genes = sort(unique(unlist(data5.positive.genes)))
+genes.idx = match(genes, rownames(celltype.activity.scores))
+sub.profile = celltype.activity.scores[genes.idx,]
+Annot = unique(colnames(celltype.activity.scores)) #changed from levels() to unique()
+colCelltype.Pal = ggpubr::get_palette("d3", length(Annot))
+names(colCelltype.Pal) = Annot
+	
+require(ComplexHeatmap)
+  
+ha_cols = HeatmapAnnotation(df = list(Celltype = colnames(sub.profile)), col = list(Celltype = colCelltype.Pal), annotation_legend_param = list(Celltype=list(title_gp = gpar(fontsize = 8), labels_gp = gpar(fontsize = 5))), which = "column")  
+  
+gradPal = grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(n = 9, name = "RdYlBu")))(100)
+Heatmap(sub.profile, col = gradPal, row_names_gp = gpar(fontsize = 6), column_names_gp = gpar(fontsize = 0), top_annotation = ha_cols, name = "Expression of marker genes", row_title = "Genes", column_title = "Cell types")
+
+```
+
+################################################### #
+# For non-unified/core archetypes:                  #
+################################################### #
+
+### 2b. Estimate gene activity score
+```{r 2b. activity score (non-unified archetypes)}
+# relationship between unified and non-unified:
+data5.ACTIONet.out$unification.out$equivalent.classes.core
+
+# activity scores for all archetypes (non-unified, 138 for data5)
+
+# I think A is already a log1p-transformed matrix, equivalent to DE.profile for unified archetypes
+# which is a copy of signature.profile, see construct.archetype.signature.profile(...) inside run.ACTIONet()
+common.genes = intersect(rownames(data5.A), rownames(PCNet))
+A.filtered = data5.A[common.genes, ]
+G.filtered = PCNet[common.genes, common.genes]
+
+data5.activity.scores = SCINET::compute_gene_activities_full(A = A.filtered,
+                                                             thread_no = 8)
+# I think naming is optional? Will be useful for visualisation though
+rownames(data5.activity.scores) = common.genes
+colnames(data5.activity.scores) = data5.arch.annot$Labels
+# arch.annot$archtypeLabels updated to arch.annot$Labels
+```
+
+### 2c. construct networks + TopS
+```{r construct networks + TopS (non-unified archetypes)}
+
+thread_no = 8 # threads for computation
+preunify.cellstate.nets = SCINET::construct_cell_networks(net = G.filtered, 
+                                                 gene_activities = data5.activity.scores, 
+                                                 thread_no = thread_no)
+preunify.cellstate.nets.list = as.list(preunify.cellstate.nets)
+
+
+min.edge.weight = 2 # graph filter parameter
+spec.sample_no = 1000 # TopS sample parameter
+preunify.cellstate.nets.list.igraph = lapply(preunify.cellstate.nets.list, function(G.Adj) {
+		G.Adj@x[G.Adj@x < min.edge.weight] = 0
+		filter.mask = Matrix::colSums(G.Adj) == 0
+		G = igraph::graph_from_adjacency_matrix(G.Adj[!filter.mask, !filter.mask], mode = "undirected", weighted = T)
+		V(G)$name = common.genes[!filter.mask]
+		#TopS
+		z.scores = topo.spec(G, spec.sample_no)
+		V(G)$specificity = 1 / (1 + exp(-z.scores))
+		
+		return(G)
+})
+# name the graphs
+if(is.null(colnames(data5.A))) {		
+		names(preunify.cellstate.nets.list.igraph) = 1:ncol(data5.A)
+	} else {
+		names(preunify.cellstate.nets.list.igraph) = colnames(data5.A)
+	}
+
+# TopS results access
+V(preunify.cellstate.nets.list.igraph$`A4_1`) # genes
+V(preunify.cellstate.nets.list.igraph$`A4_1`)$specificity # corresponding scores
+V(preunify.cellstate.nets.list.igraph$`A4_1`)[["HES1"]]
+
+
+# clean up environment
+rm(thread_no)
+rm(min.edge.weight)
+rm(spec.sample_no)
+rm(preunify.cellstate.nets)
+rm(preunify.cellstate.nets.list)
+
+rm(A.filtered)
+rm(G.filtered)
+rm(common.genes)
+rm(data5.A)
+```
+
+### Appendix
+### Visualize normalized gene activity scores for pre-unify archetypes
+```{r visualise activity score (non-unified archetypes)}
+# this is to create a list of marker genes for visualising "activity scores"
+
+# the following depends on the list of marker genes defined when preparing for ACTIONet analysis above
+# and also the named gene.activity.score matrix
+data5.positive.genes = sapply(marker.genes.new, function(gs) {
+  genes = intersect(rownames(data5.activity.scores), stringr::str_replace(gs[grep("+", gs, fixed = TRUE)], stringr::fixed("+"), ""))
+})
+
+genes = sort(unique(unlist(data5.positive.genes)))
+genes.idx = match(genes, rownames(data5.activity.scores))
+sub.profile = data5.activity.scores[genes.idx,]
+Annot = unique(colnames(data5.activity.scores)) #changed from levels() to unique()
+colCelltype.Pal = ggpubr::get_palette("d3", length(Annot))
+names(colCelltype.Pal) = Annot
+	
+require(ComplexHeatmap)
+  
+ha_cols = HeatmapAnnotation(df = list(Celltype = colnames(sub.profile)), col = list(Celltype = colCelltype.Pal), annotation_legend_param = list(Celltype=list(title_gp = gpar(fontsize = 8), labels_gp = gpar(fontsize = 5))), which = "column")  
+  
+gradPal = grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(n = 9, name = "RdYlBu")))(100)
+Heatmap(sub.profile, col = gradPal, row_names_gp = gpar(fontsize = 6), column_names_gp = gpar(fontsize = 0), top_annotation = ha_cols, name = "Expression of marker genes", row_title = "Genes", column_title = "Cell states")
+
+```
+
+
+
+
+## Load GAAD network as the reference interactome 
+Downloaded from [GAAD](http://gaad.medgenius.info/Downloads/co-occurrence_of_gene_pairs_in_ADs.txt.gz)
+
+```{r}
+GAAD = readRDS('GAAD_net.RDS')
+#PCNet
+load("/Volumes/MCWH_HDD/rotation3/interactome/PCNet.rda")
+G = graph_from_adjacency_matrix(adjmatrix = PCNet) #parameters?
+
+data5.paired.datasets = pair.datasets(G, data5.activity.scores)
+data5.paired.datasets.2 = pair.datasets(GAAD, data5.activity.scores)
+EL = get.edgelist(G, names = FALSE)
+EL.2 = get.edgelist(GAAD, names = FALSE)
+
+G.adj = as(get.adjacency(data5.paired.datasets$net), 'dgTMatrix')
+GAAD.adj = as(get.adjacency(data5.paired.datasets.2$net), 'dgTMatrix')
+
+edge.idx = (G.adj@i)*nrow(G.adj) + (G.adj@j+1)
+edge.idx.2 = (GAAD.adj@i)*nrow(GAAD.adj) + (GAAD.adj@j+1)
+```
+
+
+
+```{r}
+data5.nets = construct_cell_networks_noPrior(gene_activities = data5.paired.datasets.2$activity.scores[, 1:10], thread_no = 8)
+```
+
+
+## Compute topological-specificity of genes in each network
+```{r}
+require(igraph)
+# core.topo.spec = sapply(cellstate.nets[ACTIONet.out$core.out$core.archs], function(Adj) {
+data5.core.topo.spec = sapply(data5.nets, function(Adj) {
+  G = graph_from_adjacency_matrix(Adj, mode = "undirected", weighted = TRUE)
+  V(G)$name = data5.paired.datasets.2$genes
+  
+  topo.spec = topo.spec(G, sample_no = 1000)
+  return(topo.spec)
+})
+colnames(data5.core.topo.spec) = data5.arch.annot$Labels[1:10]#ACTIONet.out$core.out$core.archs]
+# arch.annot$archtypeLabels updated to arch.annot$Labels
+rownames(data5.core.topo.spec) = data5.paired.datasets.2$genes
+head(data5.core.topo.spec)
+```
+
+
+## Constrained networks
+```{r}
+data5.cellstate.nets = construct_cell_networks(net = GAAD.adj, 
+                                               gene_activities = data5.paired.datasets.2$activity.scores, 
+                                               thread_no = 8)
+```
+
+## Compute topological-specificity of genes in each "cellstate" network
+```{r}
+require(igraph)
+# core.topo.spec = sapply(cellstate.nets[ACTIONet.out$core.out$core.archs], function(Adj) {
+data5.cellstate.topo.spec = sapply(data5.cellstate.nets, function(Adj) {
+  G = graph_from_adjacency_matrix(Adj, mode = "undirected", weighted = TRUE)
+  V(G)$name = data5.paired.datasets.2$genes
+  
+  topo.spec = topo.spec(G, sample_no = 1000)
+  return(topo.spec)
+})
+colnames(data5.cellstate.topo.spec) = data5.arch.annot$Labels #ACTIONet.out$core.out$core.archs]
+# arch.annot$archtypeLabels updated to arch.annot$Labels
+rownames(data5.cellstate.topo.spec) = data5.paired.datasets.2$genes
+head(data5.cellstate.topo.spec)
+data5.cellstate.topo.spec["HES1",colnames(data5.cellstate.topo.spec)=="BEC"]
+```
+
+```{r packages}
+sessionInfo()
+# output as below
+```
+
+R version 4.0.0 (2020-04-24)
+Platform: x86_64-apple-darwin17.0 (64-bit)
+Running under: macOS Catalina 10.15.4
+
+Matrix products: default
+BLAS:   /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib
+LAPACK: /Library/Frameworks/R.framework/Versions/4.0/Resources/lib/libRlapack.dylib
+
+locale:
+[1] en_GB.UTF-8/en_GB.UTF-8/en_GB.UTF-8/C/en_GB.UTF-8/en_GB.UTF-8
+
+attached base packages:
+ [1] grid      parallel  stats4    stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+ [1] Seurat_3.1.5                stringr_1.4.0               ComplexHeatmap_2.3.5        ggpubr_0.2.5               
+ [5] magrittr_1.5                dplyr_0.8.5                 SCINET_1.0                  ACTIONet_1.0               
+ [9] scales_1.1.0                colorspace_1.4-1            viridis_0.5.1               viridisLite_0.3.0          
+[13] threejs_0.3.3               plotly_4.9.2.1              ggplot2_3.3.0               wordcloud_2.6              
+[17] RColorBrewer_1.1-2          NetLibR_1.0                 igraph_1.2.5                Matrix_1.2-18              
+[21] RcppArmadillo_0.9.860.2.0   Rcpp_1.0.4.6                SingleCellExperiment_1.9.3  SummarizedExperiment_1.17.5
+[25] DelayedArray_0.13.12        matrixStats_0.56.0          Biobase_2.47.3              GenomicRanges_1.39.3       
+[29] GenomeInfoDb_1.23.17        IRanges_2.21.8              S4Vectors_0.25.15           BiocGenerics_0.33.3        
+
+loaded via a namespace (and not attached):
+ [1] Rtsne_0.15             ggsignif_0.6.0         rjson_0.2.20           ellipsis_0.3.0        
+ [5] ggridges_0.5.2         circlize_0.4.8         XVector_0.27.2         GlobalOptions_0.1.1   
+ [9] base64enc_0.1-3        clue_0.3-57            rstudioapi_0.11        leiden_0.3.3          
+[13] listenv_0.8.0          farver_2.0.3           npsurv_0.4-0           ggrepel_0.8.2         
+[17] codetools_0.2-16       splines_4.0.0          R.methodsS3_1.8.0      lsei_1.2-0            
+[21] knitr_1.28             jsonlite_1.6.1         packrat_0.5.0          ica_1.0-2             
+[25] cluster_2.1.0          png_0.1-7              R.oo_1.23.0            uwot_0.1.8            
+[29] sctransform_0.2.1      compiler_4.0.0         httr_1.4.1             assertthat_0.2.1      
+[33] lazyeval_0.2.2         htmltools_0.4.0        tools_4.0.0            rsvd_1.0.3            
+[37] gtable_0.3.0           glue_1.4.0             GenomeInfoDbData_1.2.3 reshape2_1.4.4        
+[41] RANN_2.6.1             rappdirs_0.3.1         vctrs_0.2.4            gdata_2.18.0          
+[45] ape_5.3                nlme_3.1-147           crosstalk_1.1.0.1      lmtest_0.9-37         
+[49] xfun_0.13              globals_0.12.5         irlba_2.3.3            lifecycle_0.2.0       
+[53] gtools_3.8.2           future_1.17.0          zoo_1.8-7              zlibbioc_1.33.1       
+[57] MASS_7.3-51.5          yaml_2.2.1             pbapply_1.4-2          reticulate_1.15       
+[61] gridExtra_2.3          stringi_1.4.6          caTools_1.18.0         shape_1.4.4           
+[65] rlang_0.4.5            pkgconfig_2.0.3        bitops_1.0-6           lattice_0.20-41       
+[69] ROCR_1.0-7             purrr_0.3.4            patchwork_1.0.0        htmlwidgets_1.5.1     
+[73] cowplot_1.0.0          tidyselect_1.0.0       ggsci_2.9              RcppAnnoy_0.0.16      
+[77] plyr_1.8.6             R6_2.4.1               gplots_3.0.3           pillar_1.4.3          
+[81] withr_2.2.0            fitdistrplus_1.0-14    survival_3.1-12        RCurl_1.98-1.2        
+[85] tsne_0.1-3             tibble_3.0.1           future.apply_1.5.0     crayon_1.3.4          
+[89] KernSmooth_2.23-16     GetoptLong_0.1.8       data.table_1.12.8      digest_0.6.25         
+[93] tidyr_1.0.2            R.utils_2.9.2          munsell_0.5.0         
