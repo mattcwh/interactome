@@ -250,10 +250,10 @@ names(colCelltype.Pal) = Annot
 	
 require(ComplexHeatmap)
   
-ha_cols = HeatmapAnnotation(df = list(Celltype = colnames(sub.profile)), col = list(Celltype = colCelltype.Pal), annotation_legend_param = list(Celltype=list(title_gp = gpar(fontsize = 8), labels_gp = gpar(fontsize = 5))), which = "column")  
+ha_cols = HeatmapAnnotation(df = list(Archetype = colnames(sub.profile)), col = list(Archetype = colCelltype.Pal), annotation_legend_param = list(Archetype=list(title_gp = gpar(fontsize = 8), labels_gp = gpar(fontsize = 5))), which = "column")  
   
 gradPal = grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(n = 9, name = "RdYlBu")))(100)
-Heatmap(sub.profile, col = gradPal, row_names_gp = gpar(fontsize = 6), column_names_gp = gpar(fontsize = 0), top_annotation = ha_cols, name = "Expression of marker genes", row_title = "Genes", column_title = "Cell states")
+Heatmap(sub.profile, col = gradPal, row_names_gp = gpar(fontsize = 6), column_names_gp = gpar(fontsize = 0), top_annotation = ha_cols, name = "Expression of marker genes", row_title = "Genes", column_title = "Archetypes")
   
 ```
 
